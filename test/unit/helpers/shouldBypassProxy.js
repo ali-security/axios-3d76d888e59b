@@ -95,7 +95,7 @@ describe('helpers::shouldBypassProxy', () => {
   it('should not treat non-loopback hosts as loopback aliases', () => {
     setNoProxy('localhost');
 
-    assert.strictEqual(shouldBypassProxy('http://127.0.0.2:7777/'), false);
+    assert.strictEqual(shouldBypassProxy('http://128.0.0.1:7777/'), false);
     assert.strictEqual(shouldBypassProxy('http://example.com:7777/'), false);
   });
 
@@ -198,6 +198,115 @@ describe('helpers::shouldBypassProxy', () => {
 
       assert.strictEqual(shouldBypassProxy('http://[2001:db8::1]/'), true);
       assert.strictEqual(shouldBypassProxy('http://[2001:db8::2]/'), false);
+    });
+  });
+
+  describe('127.0.0.0/8 loopback equivalence (GHSA-pmwg-cvhr-8vh7)', () => {
+    it('should bypass the proxy for the whole 127.0.0.0/8 block when no_proxy lists 127.0.0.1', () => {
+      setNoProxy('localhost,127.0.0.1,::1');
+
+      assert.strictEqual(shouldBypassProxy('http://127.0.0.2:9191/secret'), true);
+      assert.strictEqual(shouldBypassProxy('http://127.0.0.100:9191/secret'), true);
+      assert.strictEqual(shouldBypassProxy('http://127.1.2.3:9191/secret'), true);
+      assert.strictEqual(shouldBypassProxy('http://127.255.255.254:9191/secret'), true);
+    });
+
+    it('should bypass the proxy for the whole 127.0.0.0/8 block when no_proxy lists localhost', () => {
+      setNoProxy('localhost');
+
+      assert.strictEqual(shouldBypassProxy('http://127.0.0.2:7777/'), true);
+      assert.strictEqual(shouldBypassProxy('http://127.1.2.3:7777/'), true);
+    });
+
+    it('should treat 127.x.x.x as cross-equivalent to ::1', () => {
+      setNoProxy('::1');
+
+      assert.strictEqual(shouldBypassProxy('http://127.0.0.5:7777/'), true);
+    });
+
+    it('should not bypass the proxy for non-loopback IPv4 addresses', () => {
+      setNoProxy('localhost,127.0.0.1,::1');
+
+      assert.strictEqual(shouldBypassProxy('http://128.0.0.1:9191/'), false);
+      assert.strictEqual(shouldBypassProxy('http://126.255.255.255:9191/'), false);
+      assert.strictEqual(shouldBypassProxy('http://10.0.0.1:9191/'), false);
+      assert.strictEqual(shouldBypassProxy('http://10.0.0.127:8080/'), false);
+      assert.strictEqual(shouldBypassProxy('http://200.127.0.1:8080/'), false);
+    });
+
+    it('should bypass the proxy for full-form and IPv4-mapped IPv6 loopback', () => {
+      setNoProxy('localhost,127.0.0.1,::1');
+
+      assert.strictEqual(shouldBypassProxy('http://[0:0:0:0:0:0:0:1]:8080/'), true);
+      assert.strictEqual(shouldBypassProxy('http://[::ffff:127.0.0.1]:8080/'), true);
+      assert.strictEqual(shouldBypassProxy('http://[::ffff:127.0.0.2]:8080/'), true);
+    });
+
+    it('should still respect an explicit port on the no_proxy entry', () => {
+      setNoProxy('127.0.0.1:8080');
+
+      assert.strictEqual(shouldBypassProxy('http://127.0.0.2:8080/'), true);
+      assert.strictEqual(shouldBypassProxy('http://127.0.0.2:9090/'), false);
+    });
+
+    it('should bypass the proxy for 0.0.0.0 when no_proxy contains a local entry (GHSA-f4gw-2p7v-4548)', () => {
+      for (const entry of ['localhost', '127.0.0.1', '::1']) {
+        setNoProxy(entry);
+
+        assert.strictEqual(shouldBypassProxy('http://0.0.0.0:7777/'), true);
+      }
+    });
+
+    it('should respect explicit ports for 0.0.0.0 local matching', () => {
+      setNoProxy('localhost:8080');
+
+      assert.strictEqual(shouldBypassProxy('http://0.0.0.0:8080/'), true);
+      assert.strictEqual(shouldBypassProxy('http://0.0.0.0:9090/'), false);
+    });
+
+    it('should bypass the proxy for the IPv6 unspecified address symmetrically with 0.0.0.0', () => {
+      for (const entry of ['localhost', '127.0.0.1', '::1']) {
+        setNoProxy(entry);
+
+        assert.strictEqual(shouldBypassProxy('http://[::]:7777/'), true);
+        assert.strictEqual(shouldBypassProxy('http://[0:0:0:0:0:0:0:0]:7777/'), true);
+      }
+    });
+
+    it('should bypass the proxy for compressed IPv6 unspecified request forms', () => {
+      setNoProxy('localhost,127.0.0.1,::1');
+
+      for (const host of ['0::', '::0', '0:0::', '::0:0', '0::0']) {
+        assert.strictEqual(shouldBypassProxy(`http://[${host}]:7777/`), true);
+      }
+    });
+
+    it('should bypass the proxy for compressed IPv6 unspecified no_proxy entries', () => {
+      for (const entry of ['0::', '::0', '0:0::', '::0:0', '0::0']) {
+        setNoProxy(entry);
+
+        assert.strictEqual(shouldBypassProxy('http://[::]:7777/'), true);
+        assert.strictEqual(shouldBypassProxy('http://[0:0:0:0:0:0:0:0]:7777/'), true);
+      }
+    });
+
+    it('should respect explicit ports on compressed IPv6 unspecified no_proxy entries', () => {
+      setNoProxy('[0::]:8080');
+
+      assert.strictEqual(shouldBypassProxy('http://[::]:8080/'), true);
+      assert.strictEqual(shouldBypassProxy('http://[::]:9090/'), false);
+    });
+
+    it('should not treat nonzero compressed IPv6 addresses as unspecified', () => {
+      setNoProxy('0::2');
+
+      assert.strictEqual(shouldBypassProxy('http://[::]:7777/'), false);
+    });
+
+    it('should still route a real public IPv6 host through the proxy', () => {
+      setNoProxy('localhost');
+
+      assert.strictEqual(shouldBypassProxy('http://[2001:db8::1]:7777/'), false);
     });
   });
 });
